@@ -1,0 +1,74 @@
+# ============================================================================
+# alt_celery3 — Docker stack for the Celery application.
+#
+# The message broker / result backend is an EXISTING, password-protected
+# redis-stack server. It is not part of this compose file: point the services
+# at it via .env (CELERY_BROKER_URL / CELERY_RESULT_BACKEND). The host used in
+# .env must be reachable from inside containers (LAN IP, docker host gateway,
+# host.docker.internal, or the redis-stack container/service name).
+# ============================================================================
+name: alt_celery3
+
+services:
+  worker:
+    image: alt_celery3:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      CELERY_WORKER_CONCURRENCY: "${CELERY_WORKER_CONCURRENCY:-2}"
+    command:
+      - celery
+      - -A
+      - app.celery_app
+      - worker
+      - --loglevel=INFO
+      - --concurrency=${CELERY_WORKER_CONCURRENCY:-2}
+    healthcheck:
+      # Celery has no built-in HTTP health endpoint; ``inspect ping`` is the
+      # canonical liveness probe and also verifies broker connectivity.
+      test: ["CMD-SHELL", "celery -A app.celery_app inspect ping --timeout 10 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  beat:
+    image: alt_celery3:latest
+    restart: unless-stopped
+    env_file: .env
+    command:
+      - celery
+      - -A
+      - app.celery_app
+      - beat
+      - --loglevel=INFO
+      - --schedule=/data/celerybeat-schedule
+    volumes:
+      - celery_beat_data:/data
+    depends_on:
+      - worker
+
+  flower:
+    image: alt_celery3:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Password protection for the dashboard, e.g. FLOWER_BASIC_AUTH=admin:secret
+      FLOWER_BASIC_AUTH: "${FLOWER_BASIC_AUTH}"
+    command:
+      - celery
+      - -A
+      - app.celery_app
+      - flower
+      - --address=0.0.0.0
+      - --port=5555
+    ports:
+      - "${FLOWER_PORT:-5555}:5555"
+    depends_on:
+      - worker
+
+volumes:
+  celery_beat_data:

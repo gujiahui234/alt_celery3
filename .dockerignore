@@ -1,0 +1,33 @@
+# --- Version control ---
+.git
+.gitignore
+
+# --- Secrets must never enter the image ---
+.env
+.env.*
+!.env.example
+
+# --- Local Python artifacts ---
+.venv
+venv
+__pycache__
+**/__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.ruff_cache
+
+# --- Local runtime data ---
+data
+celerybeat-schedule*
+*.log
+
+# --- CI / editor ---
+.github
+.idea
+.vscode
+Dockerfile
+docker-compose.yml
+update.sh
+README.md
+LICENSE
