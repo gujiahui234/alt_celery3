@@ -64,6 +64,7 @@ TASK_EXAMPLE_ADD = "tasks.example.add"
 TASK_SCHEDULED_ADD = "tasks.scheduled.add"
 TASK_TRY_MYSQL = "tasks.db.try_mysql"
 TASK_GET_ONE_STUDENT = "tasks.db.get_one_student"
+TASK_GENERATE_MANY_STUDENTS = "tasks.db.generate_many_students"
 
 #: Prefix of the Redis key that remembers the most recent periodic execution.
 LAST_RUN_KEY_PREFIX = "alt-celery3:last-run:"

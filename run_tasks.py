@@ -26,6 +26,7 @@ from kombu.exceptions import OperationalError
 from app import config
 from app.celery_app import celery_app
 from app.tasks import scheduled_tasks
+from app.tasks.bulk_student_tasks import generate_many_students
 from app.tasks.db_tasks import get_one_student, try_mysql
 from app.tasks.example_tasks import add
 
@@ -43,6 +44,8 @@ commands:
   try-mysql          test MySQL web_db connectivity (tasks.db.try_mysql)
   student            generate one student and save it to web_db
                      (tasks.db.get_one_student)
+  generate-students  bulk-generate students (tasks.db.generate_many_students,
+                     threaded + bulk INSERT, designed for million-scale runs)
   ping               ping every running worker (broker connectivity smoke test)
 
 Examples:
@@ -51,6 +54,8 @@ Examples:
   python run_tasks.py latest-scheduled
   python run_tasks.py try-mysql
   python run_tasks.py student
+  python run_tasks.py generate-students --numbers 100000 \\
+      --birthday-min 2000-01-01 --birthday-max 2010-12-31
 """
 
 
@@ -137,13 +142,19 @@ def cmd_add(args: argparse.Namespace) -> int:
     return _poll_and_print(result, config.TASK_EXAMPLE_ADD)
 
 
-def _dispatch_task(task_obj: Any, task_name: str, kwargs: dict[str, Any]) -> int:
+def _dispatch_task(
+    task_obj: Any,
+    task_name: str,
+    kwargs: dict[str, Any],
+    timeout: float = RESULT_TIMEOUT,
+) -> int:
     """Dispatch a task object (eager or via broker) and wait for its result.
 
     Args:
         task_obj: The bound Celery task to dispatch.
         task_name: Canonical task name used for messages.
         kwargs: Keyword arguments forwarded to the task.
+        timeout: Maximum number of seconds to wait for the result.
 
     Returns:
         Process exit code.
@@ -156,7 +167,7 @@ def _dispatch_task(task_obj: Any, task_name: str, kwargs: dict[str, Any]) -> int
         except OperationalError as exc:
             return _report_broker_error(exc, f"send {task_name}")
     print(f"[sent] {task_name} kwargs={kwargs} request id={result.id}")
-    return _poll_and_print(result, task_name)
+    return _poll_and_print(result, task_name, timeout=timeout)
 
 
 def cmd_try_mysql(args: argparse.Namespace) -> int:
@@ -181,6 +192,31 @@ def cmd_get_one_student(args: argparse.Namespace) -> int:
         Process exit code.
     """
     return _dispatch_task(get_one_student, config.TASK_GET_ONE_STUDENT, {})
+
+
+def cmd_generate_students(args: argparse.Namespace) -> int:
+    """Send the bulk ``tasks.db.generate_many_students`` task and wait for it.
+
+    Args:
+        args: Parsed command line arguments (numbers, birthday window,
+            batch_size, threads, timeout).
+
+    Returns:
+        Process exit code.
+    """
+    kwargs: dict[str, Any] = {
+        "numbers": args.numbers,
+        "birthday_min": args.birthday_min,
+        "birthday_max": args.birthday_max,
+        "batch_size": args.batch_size,
+        "threads": args.threads,
+    }
+    return _dispatch_task(
+        generate_many_students,
+        config.TASK_GENERATE_MANY_STUDENTS,
+        kwargs,
+        timeout=args.timeout,
+    )
 
 
 def cmd_schedules(args: argparse.Namespace) -> int:
@@ -368,6 +404,47 @@ def build_parser() -> argparse.ArgumentParser:
         "student", help="generate one student and save it to web_db"
     )
     parser_student.set_defaults(func=cmd_get_one_student)
+
+    parser_generate = subparsers.add_parser(
+        "generate-students",
+        help="bulk-generate students into web_db (threaded, million-scale)",
+    )
+    parser_generate.add_argument(
+        "--numbers",
+        type=int,
+        default=10_000,
+        help="total students to generate (default: 10000)",
+    )
+    parser_generate.add_argument(
+        "--birthday-min",
+        default="2000-01-01",
+        help="birthday lower bound: YYYY, YYYY-MM or YYYY-MM-DD "
+        "(default: 2000-01-01)",
+    )
+    parser_generate.add_argument(
+        "--birthday-max",
+        default="2010-12-31",
+        help="birthday upper bound, same formats (default: 2010-12-31)",
+    )
+    parser_generate.add_argument(
+        "--batch-size",
+        type=int,
+        default=5_000,
+        help="rows per bulk INSERT, clamped to [100, 50000] (default: 5000)",
+    )
+    parser_generate.add_argument(
+        "--threads",
+        type=int,
+        default=8,
+        help="concurrent writer threads, clamped to [1, 32] (default: 8)",
+    )
+    parser_generate.add_argument(
+        "--timeout",
+        type=float,
+        default=3600.0,
+        help="seconds to wait for the async result (default: 3600)",
+    )
+    parser_generate.set_defaults(func=cmd_generate_students)
 
     return parser
 
