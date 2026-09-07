@@ -1,0 +1,20 @@
+# Docker build dependencies of alt_celery3.
+#
+# Same set as requirements.txt, but the four GitHub-hosted custom packages are
+# referenced WITHOUT their git+https URLs: their wheels are pre-built into
+# wheelhouse/ (committed to the repo) so the Docker build never needs to reach
+# github.com (which is unreachable/flaky from some build hosts).
+# Keep this file in sync with requirements.txt.
+
+celery[redis]>=5.5.0,<6
+flower>=2.0.1,<3
+redis>=5.2.0,<7
+python-dotenv>=1.0.0,<2
+openai>=1.0,<3
+
+# --- Custom packages (installed from the local wheelhouse/ directory) --------
+# class-roster-simulator>=0.2.1 vendors its zh-name generator internally and
+# therefore no longer pulls alt-generate-zh-name from a git+https source.
+scdb-mysql-speed
+class-roster-simulator
+sclog-lite

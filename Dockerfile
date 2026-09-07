@@ -42,9 +42,14 @@ RUN apt-get update \
         --shell /usr/sbin/nologin \
         celeuser
 
-# --- Python dependencies (cached unless requirements.txt changes) ------------
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+# --- Python dependencies (cached unless the manifests/wheels change) ---------
+# requirements-docker.txt lists the same packages as requirements.txt, but the
+# GitHub-hosted custom packages come from the committed wheelhouse/ directory
+# instead of git+https URLs: docker01's build network cannot reach github.com
+# reliably, while PyPI works. --find-links resolves them from local wheels.
+COPY requirements-docker.txt wheelhouse ./
+RUN pip install --no-cache-dir --find-links=/srv/alt_celery3/wheelhouse \
+        -r requirements-docker.txt
 
 # --- Application code (owned by the non-privileged runtime user) -------------
 COPY --chown=celeuser:celeuser . .
