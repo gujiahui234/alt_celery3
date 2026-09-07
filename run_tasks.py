@@ -26,6 +26,7 @@ from kombu.exceptions import OperationalError
 from app import config
 from app.celery_app import celery_app
 from app.tasks import scheduled_tasks
+from app.tasks.ai_tasks import get_un_groups
 from app.tasks.bulk_student_tasks import generate_many_students
 from app.tasks.db_tasks import get_one_student, try_mysql
 from app.tasks.example_tasks import add
@@ -46,6 +47,8 @@ commands:
                      (tasks.db.get_one_student)
   generate-students  bulk-generate students (tasks.db.generate_many_students,
                      threaded + bulk INSERT, designed for million-scale runs)
+  get-un-groups      fetch university + major-group info via the SiliconFlow
+                     LLM API and store new rows (name-based dedup)
   ping               ping every running worker (broker connectivity smoke test)
 
 Examples:
@@ -214,6 +217,24 @@ def cmd_generate_students(args: argparse.Namespace) -> int:
     return _dispatch_task(
         generate_many_students,
         config.TASK_GENERATE_MANY_STUDENTS,
+        kwargs,
+        timeout=args.timeout,
+    )
+
+
+def cmd_get_un_groups(args: argparse.Namespace) -> int:
+    """Send the ``tasks.ai.get_un_groups`` task and wait for its result.
+
+    Args:
+        args: Parsed command line arguments (count, timeout).
+
+    Returns:
+        Process exit code.
+    """
+    kwargs: dict[str, Any] = {"count": args.count}
+    return _dispatch_task(
+        get_un_groups,
+        config.TASK_GET_UN_GROUPS,
         kwargs,
         timeout=args.timeout,
     )
@@ -445,6 +466,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="seconds to wait for the async result (default: 3600)",
     )
     parser_generate.set_defaults(func=cmd_generate_students)
+
+    parser_un = subparsers.add_parser(
+        "get-un-groups",
+        help="fetch universities + major groups via SiliconFlow LLM API",
+    )
+    parser_un.add_argument(
+        "--count",
+        type=int,
+        default=3,
+        help="number of universities to request (default: 3, max: 20)",
+    )
+    parser_un.add_argument(
+        "--timeout",
+        type=float,
+        default=300.0,
+        help="seconds to wait for the async result (default: 300)",
+    )
+    parser_un.set_defaults(func=cmd_get_un_groups)
 
     return parser
 

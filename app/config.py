@@ -65,6 +65,7 @@ TASK_SCHEDULED_ADD = "tasks.scheduled.add"
 TASK_TRY_MYSQL = "tasks.db.try_mysql"
 TASK_GET_ONE_STUDENT = "tasks.db.get_one_student"
 TASK_GENERATE_MANY_STUDENTS = "tasks.db.generate_many_students"
+TASK_GET_UN_GROUPS = "tasks.ai.get_un_groups"
 
 #: Prefix of the Redis key that remembers the most recent periodic execution.
 LAST_RUN_KEY_PREFIX = "alt-celery3:last-run:"
@@ -106,6 +107,14 @@ SCLOG_LOG_DIR: str = os.getenv("SCLOG_LOG_DIR", str(PROJECT_ROOT / "logs"))
 #: When true, ``setup_logger(mysql=True)`` reads the ``SCLOG_MYSQL_*`` variables
 #: (loaded from `.env`` above) and enables the asynchronous MySQL log backend.
 SCLOG_MYSQL_ENABLED: bool = _env_bool("SCLOG_MYSQL_ENABLED", True)
+
+# --- SiliconFlow (硅基流动) LLM API ------------------------------------------
+#: API key for the SiliconFlow Chat Completion endpoint (``.env``).
+API_KEY_GJLD: str = os.getenv("API_KEY_GJLD", "")
+#: Base URL of the OpenAI-compatible SiliconFlow endpoint (``.env``).
+BASE_URL: str = os.getenv("BASE_URL", "https://api.siliconflow.cn/v1")
+#: Chat model used by the AI tasks (overridable via ``.env``).
+GJLD_MODEL: str = os.getenv("GJLD_MODEL", "deepseek-ai/DeepSeek-V4-Flash")
 
 
 def build_beat_schedule() -> dict[str, dict[str, object]]:

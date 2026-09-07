@@ -11,6 +11,10 @@
 - **批量任务**：`tasks.db.generate_many_students` 多线程批量生成学生（支持生日范围过滤），
   基于 `scdb_mysql_speed` 的 `execute_many` 批量插入 + 每线程独享连接，实测百万级数据
   约 31 秒写入完成（> 3 万行/秒），任务过程通过 `PROGRESS` 状态实时上报进度。
+- **AI 任务**：`tasks.ai.get_un_groups` 通过硅基流动（SiliconFlow）Chat Completion API
+  获取高校及专业组信息并入库 `web_db.universities` / `major_groups`（按名称查重去重）。
+  公用函数 `gjld_chat_completion` 可向大模型提问任意问题并获取纯文本回答
+  （自动剥离 DeepSeek 系模型的 `<think>` 推理块）。
 - **监控面板**：Flower（同镜像启动，账号密码保护）。
 - **消息中间件**：复用已有的、带密码保护的 redis-stack 服务器，通过环境变量注入。
 - **生产级容器**：单镜像多服务（worker / beat / flower），镜像内显式创建非特权专用用户 `celeuser`，
@@ -32,7 +36,8 @@ alt_celery3/
 │       ├── example_tasks.py   # 普通任务示例：add
 │       ├── scheduled_tasks.py # 定时任务示例：scheduled_add + 最近结果查询
 │       ├── db_tasks.py        # MySQL 任务：try_mysql / get_one_student
-│       └── bulk_student_tasks.py  # 批量任务：generate_many_students（多线程百万级）
+│       ├── bulk_student_tasks.py  # 批量任务：generate_many_students（多线程百万级）
+│       └── ai_tasks.py        # AI 任务：get_un_groups（硅基流动 API 采集高校信息）
 ├── run_tasks.py               # 生产者 CLI：调用示例任务、查询定时任务结果
 ├── run_celery.py              # 本地启动 celery（worker/beat/flower）
 ├── Dockerfile                 # Python 3.13 镜像，专用非特权用户 celeuser
@@ -132,6 +137,9 @@ python run_tasks.py generate-students --numbers 1000000 \
 # 小规模快速验证（eager 模式在本机进程内直接执行，无需 worker）
 python run_tasks.py --eager generate-students --numbers 500 \
     --threads 4 --batch-size 100
+
+# 通过硅基流动 LLM API 采集 3 所高校及其专业组信息并入库（按名称查重）
+python run_tasks.py get-un-groups --count 3
 ```
 
 无 broker 的离线演示可用 `--eager`（任务在本地进程内直接执行）：
@@ -190,6 +198,9 @@ python run_tasks.py --eager add --x 1 --y 2
 | `MYSQL_WEB_HOST/PORT/USER/PASSWORD/DATABASE` | 业务库 `web_db` 连接信息 | `127.0.0.1/3306/...` |
 | `SCLOG_MYSQL_HOST/PORT/USER/PASSWORD/DATABASE/TABLE` | sclog-lite 日志库连接信息 | `127.0.0.1/3306/.../sclog_entries` |
 | `SCLOG_MYSQL_ENABLED` | 是否启用 sclog 异步 MySQL 日志后端 | `true` |
+| `API_KEY_GJLD` | 硅基流动（SiliconFlow）API-KEY | 无（必填） |
+| `BASE_URL` | 硅基流动 OpenAI 兼容端点 | `https://api.siliconflow.cn/v1` |
+| `GJLD_MODEL` | AI 任务使用的聊天模型 | `deepseek-ai/DeepSeek-V4-Flash` |
 
 ## 自定义包依赖
 
