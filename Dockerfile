@@ -47,7 +47,10 @@ RUN apt-get update \
 # GitHub-hosted custom packages come from the committed wheelhouse/ directory
 # instead of git+https URLs: docker01's build network cannot reach github.com
 # reliably, while PyPI works. --find-links resolves them from local wheels.
-COPY requirements-docker.txt wheelhouse ./
+COPY requirements-docker.txt ./
+# NOTE: `COPY wheelhouse ./` would flatten the directory contents into
+# WORKDIR; the explicit target keeps them under ./wheelhouse.
+COPY wheelhouse ./wheelhouse
 RUN pip install --no-cache-dir --find-links=/srv/alt_celery3/wheelhouse \
         -r requirements-docker.txt
 
