@@ -23,8 +23,14 @@ WORKDIR /srv/alt_celery3
 
 # --- OS packages & the dedicated non-privileged runtime user -----------------
 # ``passwd`` provides useradd/groupadd on the slim Debian base image.
+# ``git`` is required by pip for the git+https custom-package dependencies
+# in requirements.txt (scdb-mysql-speed / class-roster-simulator / sclog-lite).
+# ``build-essential + pkg-config + default-libmysqlclient-dev`` are needed to
+# compile the ``mysqlclient`` wheel that scdb-mysql-speed depends on.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates passwd tzdata \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates passwd tzdata git \
+        build-essential pkg-config default-libmysqlclient-dev \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 celeuser \
     && useradd \
