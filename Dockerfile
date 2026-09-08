@@ -1,4 +1,8 @@
-# syntax=docker/dockerfile:1.7
+# ============================================================================
+# NOTE: no `# syntax=` directive on purpose — pulling the dockerfile frontend
+# image from Docker Hub is unnecessary for the features used here, and some
+# build hosts cannot reach auth.docker.io at all (BuildKit falls back to its
+# builtin frontend, which covers everything this Dockerfile uses).
 # ============================================================================
 # alt_celery3 image.
 #
