@@ -121,11 +121,14 @@ def get_un_groups(count: int = DEFAULT_UN_COUNT) -> dict[str, Any]:
 
     The question is fixed inside the task (see ``_UN_GROUPS_PROMPT``); the
     model is asked for ``count`` universities with a strict JSON contract.
-    Existing rows are looked up **by name** — universities whose name already
-    exists in ``web_db.universities`` are skipped entirely (including their
-    major groups), and major groups whose name already exists for that
-    university are skipped as well. Only genuinely new rows are inserted,
-    through :mod:`scdb_mysql_speed` parameterised statements.
+    To keep the collection productive, the names already stored in
+    ``web_db.universities`` are passed to the model as an exclusion list, so
+    it returns universities that are *not* in the database yet. Existing rows
+    are still looked up **by name** as a safety net — universities whose name
+    already exists are skipped entirely (including their major groups), and
+    major groups whose name already exists for that university are skipped as
+    well. Only genuinely new rows are inserted, through
+    :mod:`scdb_mysql_speed` parameterised statements.
 
     Args:
         count: Number of universities to request from the model (1..20).
@@ -142,7 +145,30 @@ def get_un_groups(count: int = DEFAULT_UN_COUNT) -> dict[str, Any]:
 
     # --- step 1: ask the LLM --------------------------------------------------
     try:
-        reply = gjld_chat_completion(_UN_GROUPS_PROMPT.format(count=count))
+        # Tell the model which universities are already stored so it returns
+        # fresh ones; without this the model keeps returning the same famous
+        # universities and every run ends up fully de-duplicated away.
+        existing_names: list[str] = []
+        try:
+            with SCDBMySQLSpeed(web_db_meta()) as db:
+                rows = db.fetch_all(
+                    "SELECT name FROM universities ORDER BY id LIMIT 200",
+                    result_format="dict",
+                )
+            existing_names = [str(row["name"]) for row in rows]
+        except SCDBError as exc:
+            logger.bind(component="get_un_groups").warning(
+                f"读取已有高校清单失败，本次不做排除 error={exc}"
+            )
+
+        question = _UN_GROUPS_PROMPT.format(count=count)
+        if existing_names:
+            question += (
+                "\n\n重要：以下高校已存在于数据库中，严禁在返回结果里出现，"
+                "请返回其它高校：\n"
+                + "、".join(existing_names)
+            )
+        reply = gjld_chat_completion(question)
         payload = _extract_json_array(reply)
     except (ValueError, json.JSONDecodeError) as exc:
         logger.bind(component="get_un_groups").error(f"模型返回解析失败 error={exc}")
