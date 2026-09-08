@@ -115,8 +115,8 @@ def _extract_json_array(text: str) -> list[dict[str, Any]]:
     return parsed
 
 
-@celery_app.task(name=config.TASK_GET_UN_GROUPS)
-def get_un_groups(count: int = DEFAULT_UN_COUNT) -> dict[str, Any]:
+@celery_app.task(name=config.TASK_GET_UN_GROUPS, bind=True)
+def get_un_groups(self: Any, count: int = DEFAULT_UN_COUNT) -> dict[str, Any]:
     """Fetch universities + major groups from the LLM and store new rows.
 
     The question is fixed inside the task (see ``_UN_GROUPS_PROMPT``); the
@@ -143,6 +143,17 @@ def get_un_groups(count: int = DEFAULT_UN_COUNT) -> dict[str, Any]:
     logger = get_logger()
     count = max(1, min(int(count), 20))
 
+    def _progress(**meta: Any) -> None:
+        """Best-effort ``PROGRESS`` state update for the polling front end.
+
+        Args:
+            **meta: Arbitrary progress metadata (phase, counters, ...).
+        """
+        try:
+            self.update_state(state="PROGRESS", meta=meta)
+        except Exception:  # noqa: BLE001 — progress reporting is best-effort.
+            pass
+
     # --- step 1: ask the LLM --------------------------------------------------
     try:
         # Tell the model which universities are already stored so it returns
@@ -168,6 +179,13 @@ def get_un_groups(count: int = DEFAULT_UN_COUNT) -> dict[str, Any]:
                 "请返回其它高校：\n"
                 + "、".join(existing_names)
             )
+        _progress(
+            phase="llm",
+            processed=0,
+            total=count,
+            inserted_universities=0,
+            inserted_major_groups=0,
+        )
         reply = gjld_chat_completion(question)
         payload = _extract_json_array(reply)
     except (ValueError, json.JSONDecodeError) as exc:
@@ -200,7 +218,7 @@ def get_un_groups(count: int = DEFAULT_UN_COUNT) -> dict[str, Any]:
 
     try:
         with SCDBMySQLSpeed(web_db_meta()) as db:
-            for item in payload:
+            for position, item in enumerate(payload, start=1):
                 name = str(item.get("name", "")).strip()
                 if not name:
                     continue
@@ -212,6 +230,13 @@ def get_un_groups(count: int = DEFAULT_UN_COUNT) -> dict[str, Any]:
                     skipped_universities += 1
                     logger.bind(component="get_un_groups").info(
                         f"高校已存在，跳过 name={name}"
+                    )
+                    _progress(
+                        phase="db",
+                        processed=position,
+                        total=len(payload),
+                        inserted_universities=inserted_universities,
+                        inserted_major_groups=inserted_major_groups,
                     )
                     continue
 
@@ -262,6 +287,14 @@ def get_un_groups(count: int = DEFAULT_UN_COUNT) -> dict[str, Any]:
                             str(major.get("code", ""))[:6],
                         ),
                     )
+
+                _progress(
+                    phase="db",
+                    processed=position,
+                    total=len(payload),
+                    inserted_universities=inserted_universities,
+                    inserted_major_groups=inserted_major_groups,
+                )
 
     except SCDBError as exc:
         logger.bind(component="get_un_groups").error(
