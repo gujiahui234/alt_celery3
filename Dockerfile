@@ -17,10 +17,14 @@
 FROM python:3.13-slim
 
 # --- Global environment -------------------------------------------------------
+# PIP_INDEX_URL points at the Tsinghua mirror: docker01's direct PyPI route is
+# slow (tens of KB/s) and flaky. PIP_NO_CACHE_DIR is deliberately NOT set so
+# the cache mount below can keep downloaded wheels between builds.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1 \
+    PIP_DEFAULT_TIMEOUT=60 \
+    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
     TZ=UTC
 
 WORKDIR /srv/alt_celery3
@@ -31,11 +35,14 @@ WORKDIR /srv/alt_celery3
 # in requirements.txt (scdb-mysql-speed / class-roster-simulator / sclog-lite).
 # ``build-essential + pkg-config + default-libmysqlclient-dev`` are needed to
 # compile the ``mysqlclient`` wheel that scdb-mysql-speed depends on.
-RUN apt-get update \
+# The apt caches live in BuildKit cache mounts so repeat builds skip the
+# package downloads entirely.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates passwd tzdata git \
         build-essential pkg-config default-libmysqlclient-dev \
-    && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 celeuser \
     && useradd \
         --system \
@@ -50,12 +57,14 @@ RUN apt-get update \
 # requirements-docker.txt lists the same packages as requirements.txt, but the
 # GitHub-hosted custom packages come from the committed wheelhouse/ directory
 # instead of git+https URLs: docker01's build network cannot reach github.com
-# reliably, while PyPI works. --find-links resolves them from local wheels.
+# reliably, while the mirror works. --find-links resolves them from local
+# wheels; the pip cache mount keeps every downloaded wheel across builds.
 COPY requirements-docker.txt ./
 # NOTE: `COPY wheelhouse ./` would flatten the directory contents into
 # WORKDIR; the explicit target keeps them under ./wheelhouse.
 COPY wheelhouse ./wheelhouse
-RUN pip install --no-cache-dir --find-links=/srv/alt_celery3/wheelhouse \
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    pip install --find-links=/srv/alt_celery3/wheelhouse \
         -r requirements-docker.txt
 
 # --- Application code (owned by the non-privileged runtime user) -------------
