@@ -11,6 +11,10 @@
 - **批量任务**：`tasks.db.generate_many_students` 多线程批量生成学生（支持生日范围过滤），
   基于 `scdb_mysql_speed` 的 `execute_many` 批量插入 + 每线程独享连接，实测百万级数据
   约 31 秒写入完成（> 3 万行/秒），任务过程通过 `PROGRESS` 状态实时上报进度。
+- **数据库初始化**：`tasks.db.init_web_db` 一键重建 `web_db` / `log_db` 数据库及其属主用户
+  （`web_user` / `log_user`），并创建全部业务表（学生、高校、专业组、高考/本科/毕业成绩、
+  入学关系，共 7 张）。已有表自动沿用（`CREATE TABLE IF NOT EXISTS`），旧版 `students`
+  表会原地迁移出 `enrollment_status` 入学状态列。需 `.env` 中 `MYSQL_ADMIN_*` 管理员账号。
 - **AI 任务**：`tasks.ai.get_un_groups` 通过硅基流动（SiliconFlow）Chat Completion API
   获取高校及专业组信息并入库 `web_db.universities` / `major_groups`（按名称查重去重）。
   公用函数 `gjld_chat_completion` 可向大模型提问任意问题并获取纯文本回答
@@ -37,6 +41,7 @@ alt_celery3/
 │       ├── scheduled_tasks.py # 定时任务示例：scheduled_add + 最近结果查询
 │       ├── db_tasks.py        # MySQL 任务：try_mysql / get_one_student
 │       ├── bulk_student_tasks.py  # 批量任务：generate_many_students（多线程百万级）
+│       ├── init_db_tasks.py   # 数据库初始化：init_web_db（重建库/用户 + 业务表）
 │       └── ai_tasks.py        # AI 任务：get_un_groups（硅基流动 API 采集高校信息）
 ├── run_tasks.py               # 生产者 CLI：调用示例任务、查询定时任务结果
 ├── run_celery.py              # 本地启动 celery（worker/beat/flower）
@@ -122,6 +127,10 @@ python run_tasks.py ping
 # 测试 MySQL web_db 连通性（scdb-mysql-speed 连接池）
 python run_tasks.py try-mysql
 
+# 初始化（重建）web_db / log_db 数据库与用户，并创建全部业务表
+# 警告：破坏性操作——会删除 web_db、log_db 及 web_user、log_user 后重建！
+python run_tasks.py init-web-db
+
 # 生成一个学生并保存到 web_db.students（class-roster-simulator 模拟数据）
 python run_tasks.py student
 
@@ -172,14 +181,29 @@ python run_tasks.py --eager add --x 1 --y 2
 
 ## 更新部署
 
+**首次部署：**
+
+1. 克隆仓库到服务器，复制 `cp .env.example .env` 并填写：
+   broker/结果后端（redis-stack）、MySQL 管理员（`MYSQL_ADMIN_*`）、
+   业务库 `MYSQL_WEB_*`、日志库 `SCLOG_MYSQL_*` 及 AI 密钥。
+2. 构建并启动全部服务：`docker compose up -d --build`。
+3. 初始化数据库（首次部署或需要重置数据时）：
+   `python run_tasks.py init-web-db`（或在有 worker 的环境内异步投递）。
+
+**日常更新：**
+
 服务器上代码有更新时：
 
 ```bash
 ./update.sh
 ```
 
-脚本会依次：`git pull --ff-only` 拉取最新代码 → `docker compose up -d --build`
-重建镜像并平滑重启全部服务 → 输出当前栈状态。
+脚本会依次：`git fetch --all` + `git reset --hard origin/main` 拉取最新代码 →
+`docker compose build --no-cache` 重建镜像 → `docker compose up -d --remove-orphans`
+平滑重启全部服务 → `docker image prune -f` 清理悬空镜像 → 输出当前栈状态。
+
+> 注意：`update.sh` 需要服务器能访问 GitHub；若经由代理，请确认代理可达。
+> 数据库结构变更由 `init_web_db` 任务负责（破坏性：会清空 `web_db`/`log_db`）。
 
 ## 配置项（.env）
 
@@ -196,6 +220,7 @@ python run_tasks.py --eager add --x 1 --y 2
 | `FLOWER_PORT` | Flower 宿主机端口 | `5555` |
 | `FLOWER_BASIC_AUTH` | Flower 登录账号密码 | `admin:change-me` |
 | `MYSQL_WEB_HOST/PORT/USER/PASSWORD/DATABASE` | 业务库 `web_db` 连接信息 | `127.0.0.1/3306/...` |
+| `MYSQL_ADMIN_USER/PASSWORD` | 数据库管理员账号（仅 `init_web_db` 建库删库用） | `root`/无（必填） |
 | `SCLOG_MYSQL_HOST/PORT/USER/PASSWORD/DATABASE/TABLE` | sclog-lite 日志库连接信息 | `127.0.0.1/3306/.../sclog_entries` |
 | `SCLOG_MYSQL_ENABLED` | 是否启用 sclog 异步 MySQL 日志后端 | `true` |
 | `API_KEY_GJLD` | 硅基流动（SiliconFlow）API-KEY | 无（必填） |
@@ -212,11 +237,29 @@ python run_tasks.py --eager add --x 1 --y 2
 | `class-roster-simulator` | `class_roster` | 模拟生成中国学生花名册（学号/姓名/性别/出生日期） |
 | `sclog-lite` | `sclog_lite` | Loguru 扩展：控制台/轮转文件/异步批量 MySQL 日志 |
 
-`get_one_student` 任务的 `students` 表列与 `class_roster.models.Student`
-字段一一对应（`number`/`name`/`gender`/`birthday`），任务首次运行时自动建表。
-操作日志通过 sclog-lite 写入控制台、轮转文件与 `SCLOG_MYSQL_*` 指定的日志库；
-Celery worker 通过 `worker_process_init` / `worker_shutdown` 信号完成日志的
-初始化与 `shutdown()` 刷新。
+`get_one_student` / `generate_many_students` 任务将模拟学生写入
+`web_db.students`（`name`/`gender`/`birthday`/`enrollment_status`，性别存
+`M`/`F` 单字符编码，新学生默认 `enrollment_status=0` 未高考），任务运行时
+自动确保表结构存在。操作日志通过 sclog-lite 写入控制台、轮转文件与
+`SCLOG_MYSQL_*` 指定的日志库；Celery worker 通过 `worker_process_init` /
+`worker_shutdown` 信号完成日志的初始化与 `shutdown()` 刷新。
+
+### 业务表与性能设计（`init_web_db` 创建）
+
+| 表 | 说明 | 关键索引 |
+|----|------|----------|
+| `students` | 学生信息（含 `enrollment_status`：0=未高考/10=已高考未入学/20=在读/30=已毕业） | `idx_students_status`、`idx_students_gender_birthday`、`idx_students_created_at` |
+| `universities` | 高校信息 | `uk_name`、`uk_code` |
+| `major_groups` | 专业组（外键级联删除） | `uk_uni_name`、`uk_uni_code` |
+| `gaokao_scores` | 高考成绩（一学生一条） | `uk_gaokao_student`、`idx_gaokao_exam_date` |
+| `undergraduate_scores` | 本科成绩（学年 × 科目一行） | `idx_ug_student_year`、`idx_ug_exam_date` |
+| `graduation_scores` | 毕业成绩（绩点/毕业日期） | `uk_grad_student` |
+| `enrollments` | 学生-高校-专业组入学关系 | `uk_enroll_student_year`、高校/专业组/学年索引 |
+
+针对千万行级 `students` 数据的优化：全部 InnoDB + utf8mb4；高频过滤列
+（入学状态、性别+生日、创建时间）建立二级索引；成绩/关系表以
+`student_id` 前缀复合索引支撑按学生查询；外键 `ON DELETE CASCADE` 保证
+一致性；批量写入沿用 `execute_many` 批插 + 多线程连接隔离。
 
 ## 开发
 

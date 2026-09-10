@@ -65,6 +65,7 @@ TASK_SCHEDULED_ADD = "tasks.scheduled.add"
 TASK_TRY_MYSQL = "tasks.db.try_mysql"
 TASK_GET_ONE_STUDENT = "tasks.db.get_one_student"
 TASK_GENERATE_MANY_STUDENTS = "tasks.db.generate_many_students"
+TASK_INIT_WEB_DB = "tasks.db.init_web_db"
 TASK_GET_UN_GROUPS = "tasks.ai.get_un_groups"
 
 #: Prefix of the Redis key that remembers the most recent periodic execution.
@@ -78,6 +79,13 @@ WEB_DB_PORT: int = _env_int("MYSQL_WEB_PORT", 3306)
 WEB_DB_USER: str = os.getenv("MYSQL_WEB_USER", "web_user")
 WEB_DB_PASSWORD: str = os.getenv("MYSQL_WEB_PASSWORD", "")
 WEB_DB_DATABASE: str = os.getenv("MYSQL_WEB_DATABASE", "web_db")
+
+# --- MySQL admin account (database/user lifecycle management) ----------------
+# Privileged account used ONLY by the ``init_web_db`` task to drop/recreate
+# the ``web_db`` / ``log_db`` databases and their owning users. Keep the
+# credentials in `.env` (see `.env.example`); never hardcode them.
+ADMIN_USER: str = os.getenv("MYSQL_ADMIN_USER", "root")
+ADMIN_PASSWORD: str = os.getenv("MYSQL_ADMIN_PASSWORD", "")
 
 # --- Broker / result backend ------------------------------------------------
 # An existing, password-protected redis-stack server is used for both the
@@ -104,6 +112,10 @@ EXAMPLE_BEAT_MINUTES: int = _env_int("CELERY_EXAMPLE_BEAT_MINUTES", 30)
 # --- sclog-lite (operation logging) -----------------------------------------
 #: Directory for sclog-lite rotating file logs.
 SCLOG_LOG_DIR: str = os.getenv("SCLOG_LOG_DIR", str(PROJECT_ROOT / "logs"))
+#: Log database owner account (also used by the ``init_web_db`` task).
+SCLOG_MYSQL_USER: str = os.getenv("SCLOG_MYSQL_USER", "log_user")
+SCLOG_MYSQL_PASSWORD: str = os.getenv("SCLOG_MYSQL_PASSWORD", "")
+SCLOG_MYSQL_DATABASE: str = os.getenv("SCLOG_MYSQL_DATABASE", "log_db")
 #: When true, ``setup_logger(mysql=True)`` reads the ``SCLOG_MYSQL_*`` variables
 #: (loaded from `.env`` above) and enables the asynchronous MySQL log backend.
 SCLOG_MYSQL_ENABLED: bool = _env_bool("SCLOG_MYSQL_ENABLED", True)

@@ -4,8 +4,8 @@
 ``MYSQL_WEB_*`` environment variables is reachable (via the
 ``scdb-mysql-speed`` pool wrapper). ``get_one_student`` simulates one student
 with the ``class_roster`` package and persists it into the ``students`` table
-of ``web_db``; the table columns mirror the fields of
-:class:`class_roster.models.Student` (number / name / gender / birthday).
+of ``web_db``; ``gender`` is stored as the single-letter code (M/F) and every
+newly generated student starts in the 未高考 (0) enrollment state.
 
 Both tasks record what they do through the sclog-lite application logger
 (see :mod:`app.sclog_setup`), so every operation is visible on the console,
@@ -28,24 +28,61 @@ from app import config
 from app.celery_app import celery_app
 from app.sclog_setup import get_logger
 
-#: ``students`` table DDL — columns mirror ``class_roster.models.Student``:
-#: ``number`` (学号), ``name`` (姓名), ``gender`` (性别), ``birthday`` (出生日期).
+#: ``students`` table DDL — the canonical business schema. ``gender`` stores
+#: the single-letter code (``M``=男, ``F``=女) and ``enrollment_status`` tracks
+#: the admission lifecycle (0=未高考, 10=已高考未入学, 20=在读, 30=已毕业).
+#: Secondary indexes keep common filters fast when the table grows to tens of
+#: millions of rows (status-driven lists, gender/birthday demographics).
 STUDENTS_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS students (
-    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-    number INT NOT NULL COMMENT '学号',
-    name VARCHAR(64) NOT NULL COMMENT '学生姓名',
-    gender VARCHAR(8) NOT NULL COMMENT '学生性别',
-    birthday DATE NOT NULL COMMENT '出生日期',
-    created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    PRIMARY KEY (id)
+    id                BIGINT       NOT NULL AUTO_INCREMENT  COMMENT '主键',
+    name              VARCHAR(50)  NOT NULL                 COMMENT '姓名',
+    birthday          DATE         NOT NULL                 COMMENT '出生日期',
+    gender            CHAR(1)      NOT NULL                 COMMENT '性别: M=男, F=女',
+    enrollment_status TINYINT      NOT NULL DEFAULT 0       COMMENT '入学状态: 0=未高考, 10=已高考未入学, 20=在读, 30=已毕业',
+    created_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    PRIMARY KEY (id),
+    KEY idx_students_status (enrollment_status),
+    KEY idx_students_gender_birthday (gender, birthday),
+    KEY idx_students_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  COMMENT='学生信息表'
 """
 
-#: Parameterised INSERT used to persist a generated student.
+#: Parameterised INSERT used to persist a generated student. Newly generated
+#: students always start in the 未高考 (``0``) enrollment state.
 INSERT_STUDENT_SQL = (
-    "INSERT INTO students (number, name, gender, birthday) VALUES (%s, %s, %s, %s)"
+    "INSERT INTO students (name, gender, birthday, enrollment_status) "
+    "VALUES (%s, %s, %s, %s)"
 )
+
+#: Mapping from ``class_roster`` gender labels to the storage codes.
+_GENDER_CODES = {"男": "M", "女": "F"}
+
+
+def gender_code(gender: str) -> str:
+    """Convert a ``class_roster`` gender label into the storage code.
+
+    Args:
+        gender: Gender label produced by ``class_roster`` (``男`` or ``女``).
+
+    Returns:
+        ``M`` for 男, ``F`` for 女.
+
+    Raises:
+        ValueError: When the label is neither 男 nor 女.
+    """
+    try:
+        return _GENDER_CODES[gender]
+    except KeyError as error:
+        raise ValueError(f"未知的性别标签：{gender!r}") from error
+
+
+#: ``students.enrollment_status`` values (入学状态生命周期).
+ENROLLMENT_STATUS_NONE = 0       # 未高考
+ENROLLMENT_STATUS_EXAMINED = 10  # 已高考未入学
+ENROLLMENT_STATUS_ENROLLED = 20  # 在读
+ENROLLMENT_STATUS_GRADUATED = 30  # 已毕业
 
 
 def web_db_meta() -> SCDBMySQLMeta:
@@ -130,9 +167,10 @@ def get_one_student() -> dict[str, Any]:
 
     logger = get_logger()
     student = simulate_class(size=1).students[0]
+    gender = gender_code(student.gender)
     logger.bind(component="get_one_student").info(
-        f"生成学生成功 number={student.number} name={student.name} "
-        f"gender={student.gender} birthday={student.birthday.isoformat()}"
+        f"生成学生成功 name={student.name} gender={gender} "
+        f"birthday={student.birthday.isoformat()}"
     )
 
     try:
@@ -140,7 +178,7 @@ def get_one_student() -> dict[str, Any]:
             db.execute(STUDENTS_TABLE_SQL)
             affected = db.execute(
                 INSERT_STUDENT_SQL,
-                (student.number, student.name, student.gender, student.birthday),
+                (student.name, gender, student.birthday, ENROLLMENT_STATUS_NONE),
             )
     except SCDBError as exc:
         logger.bind(component="get_one_student").error(
@@ -150,10 +188,10 @@ def get_one_student() -> dict[str, Any]:
         return {
             "ok": False,
             "student": {
-                "number": student.number,
                 "name": student.name,
-                "gender": student.gender,
+                "gender": gender,
                 "birthday": student.birthday.isoformat(),
+                "enrollment_status": ENROLLMENT_STATUS_NONE,
             },
             "error": str(exc),
             "saved_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -165,10 +203,10 @@ def get_one_student() -> dict[str, Any]:
     return {
         "ok": True,
         "student": {
-            "number": student.number,
             "name": student.name,
-            "gender": student.gender,
+            "gender": gender,
             "birthday": student.birthday.isoformat(),
+            "enrollment_status": ENROLLMENT_STATUS_NONE,
         },
         "affected_rows": affected,
         "saved_at": datetime.now(UTC).isoformat(timespec="seconds"),

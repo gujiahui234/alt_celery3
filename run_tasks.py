@@ -29,6 +29,7 @@ from app.tasks import scheduled_tasks
 from app.tasks.ai_tasks import get_un_groups
 from app.tasks.bulk_student_tasks import generate_many_students
 from app.tasks.db_tasks import get_one_student, try_mysql
+from app.tasks.init_db_tasks import init_web_db
 from app.tasks.example_tasks import add
 
 #: Seconds this CLI is willing to wait for an asynchronous result.
@@ -45,6 +46,8 @@ commands:
   try-mysql          test MySQL web_db connectivity (tasks.db.try_mysql)
   student            generate one student and save it to web_db
                      (tasks.db.get_one_student)
+  init-web-db        rebuild web_db/log_db + users and create the business
+                     tables (tasks.db.init_web_db; DESTRUCTIVE)
   generate-students  bulk-generate students (tasks.db.generate_many_students,
                      threaded + bulk INSERT, designed for million-scale runs)
   get-un-groups      fetch university + major-group info via the SiliconFlow
@@ -195,6 +198,20 @@ def cmd_get_one_student(args: argparse.Namespace) -> int:
         Process exit code.
     """
     return _dispatch_task(get_one_student, config.TASK_GET_ONE_STUDENT, {})
+
+
+def cmd_init_web_db(args: argparse.Namespace) -> int:
+    """Send the ``tasks.db.init_web_db`` rebuild task and wait for it.
+
+    Args:
+        args: Parsed command line arguments (unused).
+
+    Returns:
+        Process exit code.
+    """
+    return _dispatch_task(
+        init_web_db, config.TASK_INIT_WEB_DB, {}, timeout=args.timeout
+    )
 
 
 def cmd_generate_students(args: argparse.Namespace) -> int:
@@ -425,6 +442,19 @@ def build_parser() -> argparse.ArgumentParser:
         "student", help="generate one student and save it to web_db"
     )
     parser_student.set_defaults(func=cmd_get_one_student)
+
+    parser_init = subparsers.add_parser(
+        "init-web-db",
+        help="rebuild web_db/log_db and their users, then create the "
+        "business tables (DESTRUCTIVE: drops existing data)",
+    )
+    parser_init.add_argument(
+        "--timeout",
+        type=float,
+        default=300.0,
+        help="seconds to wait for the async result (default: 300)",
+    )
+    parser_init.set_defaults(func=cmd_init_web_db)
 
     parser_generate = subparsers.add_parser(
         "generate-students",

@@ -3,13 +3,15 @@
 ``generate_many_students`` produces a large volume of simulated Chinese
 students (via :func:`class_roster.simulation.simulate_class`) whose birthdays
 fall into a configurable window, and persists them into the ``students``
-table of ``web_db`` using :mod:`scdb_mysql_speed`.
+table of ``web_db`` using :mod:`scdb_mysql_speed`. Every generated student is
+stored with the 未高考 (``0``) enrollment status.
 
 Performance design (target: >= 1,000,000 rows):
 
 - The workload is partitioned into fixed-size batches (default 5,000 rows)
-  **before** any thread starts, so every generated row has a unique
-  ``number`` without cross-thread coordination.
+  **before** any thread starts, so each writer thread streams its own
+  disjoint batches without cross-thread coordination (row identity comes
+  from the ``AUTO_INCREMENT`` primary key, not from application numbering).
 - A :class:`concurrent.futures.ThreadPoolExecutor` writes batches
   concurrently; the bottleneck is network/DB I/O, which threads overlap
   efficiently (the GIL is released inside the MySQL client).
@@ -38,7 +40,13 @@ from scdb_mysql_speed import SCDBError, SCDBMySQLMeta, SCDBMySQLSpeed
 from app import config
 from app.celery_app import celery_app
 from app.sclog_setup import get_logger
-from app.tasks.db_tasks import INSERT_STUDENT_SQL, STUDENTS_TABLE_SQL, web_db_meta
+from app.tasks.db_tasks import (
+    ENROLLMENT_STATUS_NONE,
+    INSERT_STUDENT_SQL,
+    STUDENTS_TABLE_SQL,
+    gender_code,
+    web_db_meta,
+)
 
 #: Default rows per batch (tuned for ``execute_many`` bulk inserts).
 DEFAULT_BATCH_SIZE = 5_000
@@ -49,8 +57,8 @@ DEFAULT_THREADS = 8
 #: Hard upper bound of writer threads (MySQL ``max_connections`` courtesy).
 MAX_THREADS = 32
 
-#: Type alias for one materialised student row (number, name, gender, birthday).
-StudentRow = tuple[int, str, str, Any]
+#: Type alias for one materialised student row (name, gender, birthday, status).
+StudentRow = tuple[str, str, Any, int]
 
 
 def _writer_meta() -> SCDBMySQLMeta:
@@ -70,9 +78,8 @@ def _generate_batch(
     rows_wanted: int,
     birthday_min: str | None,
     birthday_max: str | None,
-    number_start: int,
 ) -> list[StudentRow]:
-    """Simulate the rows of one batch and assign unique student numbers.
+    """Simulate the rows of one batch and map them to storage tuples.
 
     Args:
         batch_index: Zero-based index of this batch (used for logging only).
@@ -80,12 +87,10 @@ def _generate_batch(
         birthday_min: Lower bound of the birthday window (``class_roster``
             accepts a year, ``YYYY-MM``, ``YYYY-MM-DD`` or ``None``).
         birthday_max: Upper bound of the birthday window (same formats).
-        number_start: First ``number`` of this batch; rows are numbered
-            consecutively from here, guaranteeing uniqueness across batches.
 
     Returns:
-        List of ``(number, name, gender, birthday)`` tuples ready for
-        ``execute_many``.
+        List of ``(name, gender, birthday, enrollment_status)`` tuples ready
+        for ``execute_many``; every row starts as 未高考 (``0``).
     """
     from class_roster.simulation import simulate_class
 
@@ -95,26 +100,25 @@ def _generate_batch(
         birth_end=birthday_max,
     )
     rows: list[StudentRow] = []
-    for offset, student in enumerate(roster.students):
+    for student in roster.students:
         rows.append(
             (
-                number_start + offset,
                 student.name,
-                student.gender,
+                gender_code(student.gender),
                 student.birthday,
+                ENROLLMENT_STATUS_NONE,
             )
         )
     logger = get_logger()
     logger.bind(component="generate_many_students").debug(
-        f"batch={batch_index} 模拟生成 {len(rows)} 名学生 "
-        f"number=[{number_start}, {number_start + len(rows) - 1}]"
+        f"batch={batch_index} 模拟生成 {len(rows)} 名学生（默认未高考）"
     )
     return rows
 
 
 def _write_batches(
     thread_id: int,
-    jobs: list[tuple[int, int, int]],
+    jobs: list[tuple[int, int]],
     birthday_min: str | None,
     birthday_max: str | None,
     batch_size: int,
@@ -129,7 +133,7 @@ def _write_batches(
 
     Args:
         thread_id: Identifier of the writer thread (for logs).
-        jobs: List of ``(batch_index, rows_wanted, number_start)`` tuples.
+        jobs: List of ``(batch_index, rows_wanted)`` tuples.
         birthday_min: Lower bound of the birthday window (may be ``None``).
         birthday_max: Upper bound of the birthday window (may be ``None``).
         batch_size: Configured batch size (only used for progress logs).
@@ -149,10 +153,8 @@ def _write_batches(
     logger = get_logger()
     inserted = 0
     with SCDBMySQLSpeed(_writer_meta()) as db:
-        for batch_index, rows_wanted, number_start in jobs:
-            rows = _generate_batch(
-                batch_index, rows_wanted, birthday_min, birthday_max, number_start
-            )
+        for batch_index, rows_wanted in jobs:
+            rows = _generate_batch(batch_index, rows_wanted, birthday_min, birthday_max)
             affected = db.execute_many(INSERT_STUDENT_SQL, rows)
             inserted += affected
 
@@ -204,8 +206,9 @@ def generate_many_students(
     Returns:
         Dictionary with ``ok``, ``requested``, ``inserted``, timing/rate
         statistics, the effective ``batch_size``/``threads``, the assigned
-        ``number_start``/``number_end`` and a UTC ``finished_at`` timestamp.
-        On failure ``ok`` is ``False`` and ``error`` carries the message.
+        ``id_start``/``id_end`` (AUTO_INCREMENT range) and a UTC
+        ``finished_at`` timestamp. On failure ``ok`` is ``False`` and
+        ``error`` carries the message.
     """
     logger = get_logger()
     started = time.perf_counter()
@@ -226,25 +229,23 @@ def generate_many_students(
     progress: dict[str, int] = {"inserted": 0}
 
     try:
-        # --- prepare: table guard + starting number ---------------------------
+        # --- prepare: table guard + current id high-water mark -----------------
         with SCDBMySQLSpeed(web_db_meta()) as db:
             db.execute(STUDENTS_TABLE_SQL)
-            number_base = int(
-                db.fetch_one("SELECT COALESCE(MAX(number), 0) FROM students")[0]
+            id_base = int(
+                db.fetch_one("SELECT COALESCE(MAX(id), 0) FROM students")[0]
             )
 
-        # --- partition into batches with disjoint number ranges ---------------
-        jobs: dict[int, list[tuple[int, int, int]]] = {
+        # --- partition into batches (row identity via AUTO_INCREMENT) ----------
+        jobs: dict[int, list[tuple[int, int]]] = {
             worker: [] for worker in range(threads)
         }
         batch_index = 0
         remaining = numbers
-        number_cursor = number_base
         while remaining > 0:
             rows_wanted = min(batch_size, remaining)
             worker = batch_index % threads
-            jobs[worker].append((batch_index, rows_wanted, number_cursor + 1))
-            number_cursor += rows_wanted
+            jobs[worker].append((batch_index, rows_wanted))
             remaining -= rows_wanted
             batch_index += 1
 
@@ -252,7 +253,7 @@ def generate_many_students(
         logger.bind(component="generate_many_students").info(
             f"批量生成启动 numbers={numbers} birthday=[{birthday_min}, "
             f"{birthday_max}] batch_size={batch_size} threads={threads} "
-            f"batches={total_batches} number_start={number_base + 1}"
+            f"batches={total_batches} id_start={id_base + 1}"
         )
 
         # --- fan out ------------------------------------------------------------
@@ -291,8 +292,8 @@ def generate_many_students(
             "batches": total_batches,
             "batch_size": batch_size,
             "threads": threads,
-            "number_start": number_base + 1,
-            "number_end": number_base + inserted,
+            "id_start": id_base + 1,
+            "id_end": id_base + inserted,
             "birthday_min": birthday_min,
             "birthday_max": birthday_max,
             "elapsed_seconds": round(elapsed, 2),
