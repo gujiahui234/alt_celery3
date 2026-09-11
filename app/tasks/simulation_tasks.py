@@ -698,7 +698,9 @@ def simu_exam(
                 )
                 if not rows:
                     return
+                # 流式生成与刷盘：每积攒 2000 行立即写入，避免整窗口数据驻留内存。
                 exam_rows: list[tuple[int, int, str, float, date]] = []
+                flushed = 0
                 for row in rows:
                     student_id = int(row[0])
                     k = rng.randint(5, 10)
@@ -713,17 +715,26 @@ def simu_exam(
                                 exam_date,
                             )
                         )
-                for start in range(0, len(exam_rows), BULK_CHUNK):
+                        if len(exam_rows) >= 2000:
+                            db.execute_many(
+                                "INSERT IGNORE INTO undergraduate_scores "
+                                "(student_id, academic_year, subject, score, exam_date) "
+                                "VALUES (%s, %s, %s, %s, %s)",
+                                exam_rows,
+                            )
+                            flushed += len(exam_rows)
+                            exam_rows = []
+                if exam_rows:
                     db.execute_many(
                         "INSERT IGNORE INTO undergraduate_scores "
                         "(student_id, academic_year, subject, score, exam_date) "
                         "VALUES (%s, %s, %s, %s, %s)",
-                        exam_rows[start : start + BULK_CHUNK],
+                        exam_rows,
                     )
                 with lock:
                     counters["windows"] += 1
                     counters["students"] += len(rows)
-                    counters["exams"] += len(exam_rows)
+                    counters["exams"] += flushed + len(exam_rows)
                     done = counters["windows"]
                     students_done = counters["students"]
                     exams_done = counters["exams"]
