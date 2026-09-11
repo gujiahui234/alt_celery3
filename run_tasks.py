@@ -21,6 +21,7 @@ import time
 from typing import Any
 
 import redis
+from alt_celery3_contract import TASK_CATALOG
 from kombu.exceptions import OperationalError
 
 from app import config
@@ -58,6 +59,7 @@ commands:
                      threaded + bulk INSERT, designed for million-scale runs)
   get-un-groups      fetch university + major-group info via the SiliconFlow
                      LLM API and store new rows (name-based dedup)
+  catalog            print the task contract catalog (names, payload schemas)
   ping               ping every running worker (broker connectivity smoke test)
 
 Examples:
@@ -117,6 +119,30 @@ def _poll_and_print(result: Any, title: str, timeout: float = RESULT_TIMEOUT) ->
     return 1
 
 
+def _validated_kwargs(task_name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Validate producer kwargs against the alt_celery3_contract schemas.
+
+    The contract package carries a Pydantic payload model per task; validating
+    here fails fast on the producer side instead of inside the worker.
+
+    Args:
+        task_name: Canonical task name to look up in the contract catalog.
+        kwargs: Keyword arguments intended for the task.
+
+    Returns:
+        The validated (and defaulted) keyword arguments; returned unchanged
+        when the task is not part of the contract catalog.
+
+    Raises:
+        ValueError: When a zero-argument task receives arguments.
+        pydantic.ValidationError: When the payload violates the contract.
+    """
+    contract = TASK_CATALOG.get(task_name)
+    if contract is None:
+        return kwargs
+    return contract.validate_kwargs(kwargs)
+
+
 def _report_broker_error(exc: Exception, action: str) -> int:
     """Print a broker/backend connectivity error with an actionable hint.
 
@@ -171,6 +197,7 @@ def _dispatch_task(
     Returns:
         Process exit code.
     """
+    kwargs = _validated_kwargs(task_name, kwargs)
     if celery_app.conf.task_always_eager:
         result = task_obj.apply(kwargs=kwargs)
     else:
@@ -263,7 +290,7 @@ def cmd_get_un_groups(args: argparse.Namespace) -> int:
     )
 
 
-def _simu_dispatch(task_obj: Any, task_name: str, year: int, threads: int) -> int:
+def _simu_dispatch(task_obj: Any, task_name: str, kwargs: dict[str, Any]) -> int:
     """Dispatch one simulation task with its year and thread count.
 
     Returns:
@@ -272,7 +299,7 @@ def _simu_dispatch(task_obj: Any, task_name: str, year: int, threads: int) -> in
     return _dispatch_task(
         task_obj,
         task_name,
-        {"year": year, "threads": threads},
+        kwargs,
         timeout=3600.0,
     )
 
@@ -286,25 +313,37 @@ def cmd_simu_ncee(args: argparse.Namespace) -> int:
     Returns:
         Process exit code.
     """
-    return _simu_dispatch(simu_ncee, config.TASK_SIMU_NCEE, args.year, args.threads)
+    return _simu_dispatch(
+        simu_ncee,
+        config.TASK_SIMU_NCEE,
+        {"ncee_year": args.year, "threads": args.threads},
+    )
 
 
 def cmd_simu_admission(args: argparse.Namespace) -> int:
     """Dispatch the tier-based university admission task."""
     return _simu_dispatch(
-        simu_admission, config.TASK_SIMU_ADMISSION, args.year, args.threads
+        simu_admission,
+        config.TASK_SIMU_ADMISSION,
+        {"ncee_year": args.year, "threads": args.threads},
     )
 
 
 def cmd_simu_exam(args: argparse.Namespace) -> int:
     """Dispatch the in-university exam simulation task."""
-    return _simu_dispatch(simu_exam, config.TASK_SIMU_EXAM, args.year, args.threads)
+    return _simu_dispatch(
+        simu_exam,
+        config.TASK_SIMU_EXAM,
+        {"academic_year": args.year, "threads": args.threads},
+    )
 
 
 def cmd_simu_graduate(args: argparse.Namespace) -> int:
     """Dispatch the graduation (GPA computation) task."""
     return _simu_dispatch(
-        simu_graduate, config.TASK_SIMU_GRADUATE, args.year, args.threads
+        simu_graduate,
+        config.TASK_SIMU_GRADUATE,
+        {"graduate_year": args.year, "threads": args.threads},
     )
 
 
@@ -360,6 +399,7 @@ def cmd_trigger_scheduled(args: argparse.Namespace) -> int:
         "y": args.y if args.y is not None else base_kwargs.get("y", 21),
     }
     print(f"[send] periodic task {task_name} kwargs={kwargs}")
+    kwargs = _validated_kwargs(task_name, kwargs)
     if celery_app.conf.task_always_eager:
         # In eager mode ``send_task`` is ignored by Celery; run the task
         # in-process instead so offline demos behave like a real dispatch.
@@ -403,6 +443,27 @@ def cmd_latest_scheduled(args: argparse.Namespace) -> int:
     result = celery_app.AsyncResult(task_id)
     print(f"[found] {task_name} last request id={task_id}, state={result.state}")
     return _poll_and_print(result, f"last scheduled run of {task_name}")
+
+
+def cmd_catalog(args: argparse.Namespace) -> int:
+    """Print the task contract catalog extracted into alt_celery3_contract.
+
+    Args:
+        args: Parsed command line arguments (unused).
+
+    Returns:
+        Process exit code.
+    """
+    print(f"{len(TASK_CATALOG)} task contract(s) in alt_celery3_contract:\n")
+    for name, contract in TASK_CATALOG.items():
+        schema_label = (
+            contract.schema.__name__ if contract.schema is not None else "(no args)"
+        )
+        bound_label = " bind=True" if contract.bound else ""
+        print(f"- {name}")
+        print(f"    source module: {contract.module}{bound_label}")
+        print(f"    payload schema: {schema_label}")
+    return 0
 
 
 def cmd_ping(args: argparse.Namespace) -> int:
@@ -483,6 +544,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser_ping = subparsers.add_parser("ping", help="ping all connected workers")
     parser_ping.set_defaults(func=cmd_ping)
+
+    parser_catalog = subparsers.add_parser(
+        "catalog",
+        help="print the task contract catalog (alt_celery3_contract)",
+    )
+    parser_catalog.set_defaults(func=cmd_catalog)
 
     parser_try_mysql = subparsers.add_parser(
         "try-mysql", help="test MySQL web_db connectivity"

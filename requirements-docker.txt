@@ -18,3 +18,4 @@ openai>=1.0,<3
 scdb-mysql-speed
 class-roster-simulator
 sclog-lite
+alt-celery3-contract

@@ -37,6 +37,8 @@ dependencies = [
     "class-roster-simulator @ git+https://github.com/gujiahui234/class_roster_simulator-0.1.0.git",
     # Loguru extension: console/file/async-batched MySQL logging.
     "sclog-lite @ git+https://github.com/gujiahui234/sclog_lite.git",
+    # Declarative task contracts (names, signatures, payload schemas).
+    "alt-celery3-contract @ git+https://github.com/gujiahui234/alt_celery3_contract.git",
 ]
 
 [project.optional-dependencies]

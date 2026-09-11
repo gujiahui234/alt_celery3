@@ -252,13 +252,14 @@ python run_tasks.py --eager add --x 1 --y 2
 
 ## 自定义包依赖
 
-三个自定义包以 GitHub 直连依赖方式安装（见 `pyproject.toml` / `requirements.txt`）：
+四个自定义包以 GitHub 直连依赖方式安装（见 `pyproject.toml` / `requirements.txt`）：
 
 | 包 | 导入名 | 用途 |
 |----|--------|------|
 | `scdb-mysql-speed` | `scdb_mysql_speed` | 高性能 MySQL 客户端（MySQLdb + 连接池，参数化 SQL） |
 | `class-roster-simulator` | `class_roster` | 模拟生成中国学生花名册（学号/姓名/性别/出生日期） |
 | `sclog-lite` | `sclog_lite` | Loguru 扩展：控制台/轮转文件/异步批量 MySQL 日志 |
+| `alt-celery3-contract` | `alt_celery3_contract` | 任务契约包：任务名/入参签名/Pydantic 校验 Schema 的单一事实来源 |
 
 `get_one_student` / `generate_many_students` 任务将模拟学生写入
 `web_db.students`（`name`/`gender`/`birthday`/`enrollment_status`，性别存
@@ -266,6 +267,24 @@ python run_tasks.py --eager add --x 1 --y 2
 自动确保表结构存在。操作日志通过 sclog-lite 写入控制台、轮转文件与
 `SCLOG_MYSQL_*` 指定的日志库；Celery worker 通过 `worker_process_init` /
 `worker_shutdown` 信号完成日志的初始化与 `shutdown()` 刷新。
+
+### 任务契约包（`alt-celery3-contract`）
+
+所有任务的注册名（`TASK_*`）现已从契约包的 `TaskName` 枚举读取，
+`run_tasks.py` 在派发任务前会先用契约包的 Pydantic Payload Schema 校验
+入参（非法参数在 producer 侧即报错，不再进入 worker）。
+
+```bash
+# 查看任务契约目录（任务名、来源模块、Payload Schema）
+python run_tasks.py catalog
+
+# 契约兼容性验证（需能同时导入本应用与契约包）
+python ../alt_celery3_contract/scripts/verify_contracts.py
+```
+
+契约包的更新流程：任务在 `alt_celery3` 中发生签名/命名变更时，同步更新
+`alt_celery3_contract` 并运行上述验证脚本；Docker 离线构建使用的 wheel
+位于 `wheelhouse/`（由契约项目 `pip wheel --no-deps -w wheelhouse .` 重新生成）。
 
 ### 业务表与性能设计（`init_web_db` 创建）
 

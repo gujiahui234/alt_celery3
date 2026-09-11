@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from alt_celery3_contract import TaskName
 from celery.schedules import crontab
 from dotenv import find_dotenv, load_dotenv
 
@@ -58,19 +59,21 @@ def _env_int(name: str, default: int) -> int:
 # --- Application identity ---------------------------------------------------
 APP_NAME = "alt_celery3"
 
-# Canonical task names. Keeping them here (instead of strings spread through
-# the code) gives producers and the beat schedule a single source of truth.
-TASK_EXAMPLE_ADD = "tasks.example.add"
-TASK_SCHEDULED_ADD = "tasks.scheduled.add"
-TASK_TRY_MYSQL = "tasks.db.try_mysql"
-TASK_GET_ONE_STUDENT = "tasks.db.get_one_student"
-TASK_GENERATE_MANY_STUDENTS = "tasks.db.generate_many_students"
-TASK_INIT_WEB_DB = "tasks.db.init_web_db"
-TASK_GET_UN_GROUPS = "tasks.ai.get_un_groups"
-TASK_SIMU_NCEE = "tasks.simu.ncee"
-TASK_SIMU_ADMISSION = "tasks.simu.admission"
-TASK_SIMU_EXAM = "tasks.simu.exam"
-TASK_SIMU_GRADUATE = "tasks.simu.graduate"
+# Canonical task names. Since the alt_celery3_contract package was extracted,
+# the names are sourced from its TaskName enum (single source of truth shared
+# by producers, workers, beat schedules and monitoring) instead of being
+# re-declared here as raw strings.
+TASK_EXAMPLE_ADD = TaskName.TASK_EXAMPLE_ADD.value
+TASK_SCHEDULED_ADD = TaskName.TASK_SCHEDULED_ADD.value
+TASK_TRY_MYSQL = TaskName.TASK_TRY_MYSQL.value
+TASK_GET_ONE_STUDENT = TaskName.TASK_GET_ONE_STUDENT.value
+TASK_GENERATE_MANY_STUDENTS = TaskName.TASK_GENERATE_MANY_STUDENTS.value
+TASK_INIT_WEB_DB = TaskName.TASK_INIT_WEB_DB.value
+TASK_GET_UN_GROUPS = TaskName.TASK_GET_UN_GROUPS.value
+TASK_SIMU_NCEE = TaskName.TASK_SIMU_NCEE.value
+TASK_SIMU_ADMISSION = TaskName.TASK_SIMU_ADMISSION.value
+TASK_SIMU_EXAM = TaskName.TASK_SIMU_EXAM.value
+TASK_SIMU_GRADUATE = TaskName.TASK_SIMU_GRADUATE.value
 
 #: Prefix of the Redis key that remembers the most recent periodic execution.
 LAST_RUN_KEY_PREFIX = "alt-celery3:last-run:"

@@ -14,3 +14,4 @@ openai>=1.0,<3
 scdb-mysql-speed @ git+https://github.com/gujiahui234/sql_speed.git
 class-roster-simulator @ git+https://github.com/gujiahui234/class_roster_simulator-0.1.0.git
 sclog-lite @ git+https://github.com/gujiahui234/sclog_lite.git
+alt-celery3-contract @ git+https://github.com/gujiahui234/alt_celery3_contract.git
