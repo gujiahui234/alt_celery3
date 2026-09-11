@@ -25,6 +25,7 @@ celery_app = Celery(
         "app.tasks.db_tasks",
         "app.tasks.bulk_student_tasks",
         "app.tasks.init_db_tasks",
+        "app.tasks.simulation_tasks",
         "app.tasks.ai_tasks",
     ],
 )

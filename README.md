@@ -149,6 +149,29 @@ python run_tasks.py --eager generate-students --numbers 500 \
 
 # 通过硅基流动 LLM API 采集 3 所高校及其专业组信息并入库（按名称查重）
 python run_tasks.py get-un-groups --count 3
+
+# ── 模拟流水线（高考 → 录取 → 在读考试 → 毕业）───────────────────────────
+# 1. 高考评测：对高三年龄段（17-19 岁）且未高考的学生模拟考试，
+#    分数 Normal(530, 50) 截断到 [400, 660]，考试日期固定 6 月 20 日，
+#    写入 gaokao_scores，学生状态 → 10（已高考未入学）
+python run_tasks.py simu-ncee --year 2027
+
+# 2. 高校录取：按当年高考成绩分位录取（前 5% → 985，5-15% → 211，
+#    15-30% → 一本，其余 → 其他），随机分派高校与专业组，写入 enrollments，
+#    学生状态 → 20（在读）
+python run_tasks.py simu-admission --year 2027
+
+# 3. 本科考试：对在读学生（入学学年在近四年内）模拟每生 5-10 次考试，
+#    分数 Normal(70, 15) 截断到 [0, 100]，日期避开寒暑假随机采样，
+#    写入 undergraduate_scores
+python run_tasks.py simu-exam --year 2028
+
+# 4. 本科毕业：对入学满四年的在读学生按全部本科成绩计算 GPA（4.0 制），
+#    写入 graduation_scores，毕业日期固定 7 月 1 日，学生状态 → 30（已毕业）
+python run_tasks.py simu-graduate --year 2031
+
+# 全部任务支持 --threads（并发写线程数，默认 8）且可幂等重跑（INSERT IGNORE）
+python run_tasks.py simu-ncee --year 2027 --threads 16
 ```
 
 无 broker 的离线演示可用 `--eager`（任务在本地进程内直接执行）：

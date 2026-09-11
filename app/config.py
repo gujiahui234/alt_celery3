@@ -67,6 +67,10 @@ TASK_GET_ONE_STUDENT = "tasks.db.get_one_student"
 TASK_GENERATE_MANY_STUDENTS = "tasks.db.generate_many_students"
 TASK_INIT_WEB_DB = "tasks.db.init_web_db"
 TASK_GET_UN_GROUPS = "tasks.ai.get_un_groups"
+TASK_SIMU_NCEE = "tasks.simu.ncee"
+TASK_SIMU_ADMISSION = "tasks.simu.admission"
+TASK_SIMU_EXAM = "tasks.simu.exam"
+TASK_SIMU_GRADUATE = "tasks.simu.graduate"
 
 #: Prefix of the Redis key that remembers the most recent periodic execution.
 LAST_RUN_KEY_PREFIX = "alt-celery3:last-run:"

@@ -31,6 +31,12 @@ from app.tasks.bulk_student_tasks import generate_many_students
 from app.tasks.db_tasks import get_one_student, try_mysql
 from app.tasks.init_db_tasks import init_web_db
 from app.tasks.example_tasks import add
+from app.tasks.simulation_tasks import (
+    simu_admission,
+    simu_exam,
+    simu_graduate,
+    simu_ncee,
+)
 
 #: Seconds this CLI is willing to wait for an asynchronous result.
 RESULT_TIMEOUT = 60.0
@@ -254,6 +260,51 @@ def cmd_get_un_groups(args: argparse.Namespace) -> int:
         config.TASK_GET_UN_GROUPS,
         kwargs,
         timeout=args.timeout,
+    )
+
+
+def _simu_dispatch(task_obj: Any, task_name: str, year: int, threads: int) -> int:
+    """Dispatch one simulation task with its year and thread count.
+
+    Returns:
+        Process exit code.
+    """
+    return _dispatch_task(
+        task_obj,
+        task_name,
+        {"year": year, "threads": threads},
+        timeout=3600.0,
+    )
+
+
+def cmd_simu_ncee(args: argparse.Namespace) -> int:
+    """Dispatch the simulated college entrance exam task.
+
+    Args:
+        args: Parsed command line arguments (year, threads).
+
+    Returns:
+        Process exit code.
+    """
+    return _simu_dispatch(simu_ncee, config.TASK_SIMU_NCEE, args.year, args.threads)
+
+
+def cmd_simu_admission(args: argparse.Namespace) -> int:
+    """Dispatch the tier-based university admission task."""
+    return _simu_dispatch(
+        simu_admission, config.TASK_SIMU_ADMISSION, args.year, args.threads
+    )
+
+
+def cmd_simu_exam(args: argparse.Namespace) -> int:
+    """Dispatch the in-university exam simulation task."""
+    return _simu_dispatch(simu_exam, config.TASK_SIMU_EXAM, args.year, args.threads)
+
+
+def cmd_simu_graduate(args: argparse.Namespace) -> int:
+    """Dispatch the graduation (GPA computation) task."""
+    return _simu_dispatch(
+        simu_graduate, config.TASK_SIMU_GRADUATE, args.year, args.threads
     )
 
 
@@ -514,6 +565,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="seconds to wait for the async result (default: 300)",
     )
     parser_un.set_defaults(func=cmd_get_un_groups)
+
+    parser_ncee = subparsers.add_parser(
+        "simu-ncee", help="simulate the college entrance exam for one year"
+    )
+    parser_ncee.add_argument(
+        "--year", type=int, required=True, help="exam year (exam date: 6/20)"
+    )
+    parser_ncee.add_argument("--threads", type=int, default=8)
+    parser_ncee.set_defaults(func=cmd_simu_ncee)
+
+    parser_adm = subparsers.add_parser(
+        "simu-admission",
+        help="admit the exam cohort into universities by score tier",
+    )
+    parser_adm.add_argument(
+        "--year", type=int, required=True, help="exam year of the cohort"
+    )
+    parser_adm.add_argument("--threads", type=int, default=8)
+    parser_adm.set_defaults(func=cmd_simu_admission)
+
+    parser_exam = subparsers.add_parser(
+        "simu-exam", help="simulate in-university exams for an academic year"
+    )
+    parser_exam.add_argument(
+        "--year", type=int, required=True, help="starting year of the academic year"
+    )
+    parser_exam.add_argument("--threads", type=int, default=8)
+    parser_exam.set_defaults(func=cmd_simu_exam)
+
+    parser_grad = subparsers.add_parser(
+        "simu-graduate", help="graduate the cohort enrolled 4 years earlier"
+    )
+    parser_grad.add_argument(
+        "--year", type=int, required=True, help="graduation year (date: 7/1)"
+    )
+    parser_grad.add_argument("--threads", type=int, default=8)
+    parser_grad.set_defaults(func=cmd_simu_graduate)
 
     return parser
 
