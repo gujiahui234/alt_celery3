@@ -312,6 +312,8 @@ def simu_ncee(
                 return
             w_lo, w_hi = window
             with SCDBMySQLSpeed(_writer_meta()) as db:
+                # autocommit：每条语句立即释放行锁，避免多线程锁累积死锁。
+                db.execute("SET autocommit = 1")
                 rows = db.fetch_all(
                     "SELECT id FROM students "
                     "WHERE id >= %s AND id < %s AND enrollment_status = %s "
@@ -578,6 +580,8 @@ def simu_admission(
                 SCDBError: Propagated from the underlying MySQL client.
             """
             with SCDBMySQLSpeed(_writer_meta()) as db:
+                # autocommit：每条语句立即释放行锁，避免多线程锁累积死锁。
+                db.execute("SET autocommit = 1")
                 while True:
                     chunk = out_queue.get()
                     if chunk is None:
@@ -755,6 +759,8 @@ def simu_exam(
                 return
             w_lo, w_hi = window
             with SCDBMySQLSpeed(_writer_meta()) as db:
+                # autocommit：每条语句立即释放行锁，避免多线程锁累积死锁。
+                db.execute("SET autocommit = 1")
                 rows = db.fetch_all(
                     "SELECT DISTINCT e.student_id FROM enrollments e "
                     "JOIN students s ON s.id = e.student_id "
@@ -939,6 +945,8 @@ def simu_graduate(
                 return
             w_lo, w_hi = window
             with SCDBMySQLSpeed(_writer_meta()) as db:
+                # autocommit：每条语句立即释放行锁，避免多线程锁累积死锁。
+                db.execute("SET autocommit = 1")
                 rows = db.fetch_all(
                     "SELECT e.student_id FROM enrollments e "
                     "JOIN students s ON s.id = e.student_id "
