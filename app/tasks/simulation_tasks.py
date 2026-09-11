@@ -105,6 +105,74 @@ def _clamp(value: float, low: int, high: int) -> int:
     return max(low, min(high, round(value)))
 
 
+def _execute_retry(
+    db: SCDBMySQLSpeed,
+    sql: str,
+    params: Any = None,
+    attempts: int = 4,
+) -> int:
+    """Execute one statement, retrying transient InnoDB lock errors.
+
+    Deadlocks (1213) and lock-wait timeouts (1205) are expected when several
+    writer threads bulk-insert into the same indexes; the rolled-back
+    statement is always safe to replay because every write in this module is
+    idempotent (``INSERT IGNORE`` or a constant status update).
+
+    Args:
+        db: An open ``SCDBMySQLSpeed`` connection.
+        sql: The statement to execute.
+        params: Query parameters.
+        attempts: Maximum number of attempts.
+
+    Returns:
+        The affected-row count of the successful attempt.
+
+    Raises:
+        SCDBError: Re-raised when attempts are exhausted or the error is not
+            a transient lock error.
+    """
+    delay = 0.2
+    for attempt in range(attempts):
+        try:
+            return db.execute(sql, params)
+        except SCDBError as exc:
+            message = str(exc)
+            transient = "1213" in message or "1205" in message
+            if not transient or attempt == attempts - 1:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 2.0)
+    return 0
+
+
+def _bulk_retry(
+    db: SCDBMySQLSpeed,
+    sql: str,
+    rows: list[tuple],
+    attempts: int = 4,
+) -> None:
+    """Execute a bulk ``execute_many`` with transient-lock retry.
+
+    Args:
+        db: An open ``SCDBMySQLSpeed`` connection.
+        sql: The bulk statement.
+        rows: Parameter rows.
+        attempts: Maximum number of attempts.
+    """
+    delay = 0.2
+    for attempt in range(attempts):
+        try:
+            db.execute_many(sql, rows)
+            return
+        except SCDBError as exc:
+            message = str(exc)
+            transient = "1213" in message or "1205" in message
+            if not transient or attempt == attempts - 1:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 2.0)
+
+
 def _id_bounds(where: str, params: tuple[Any, ...]) -> tuple[int | None, int | None]:
     """Return ``(MIN(id), MAX(id))`` of the students matching a condition.
 
@@ -261,12 +329,14 @@ def simu_ncee(
                     for row in rows
                 ]
                 for start in range(0, len(scored_rows), BULK_CHUNK):
-                    db.execute_many(
+                    _bulk_retry(
+                        db,
                         "INSERT IGNORE INTO gaokao_scores "
                         "(student_id, score, exam_date) VALUES (%s, %s, %s)",
                         scored_rows[start : start + BULK_CHUNK],
                     )
-                db.execute(
+                _execute_retry(
+                    db,
                     "UPDATE students SET enrollment_status = %s "
                     "WHERE id >= %s AND id < %s AND enrollment_status = %s",
                     (ENROLLMENT_STATUS_EXAMINED, w_lo, w_hi, ENROLLMENT_STATUS_NONE),
@@ -486,6 +556,7 @@ def simu_admission(
                                 admitted_by_nature[nature] += 1
                             break
                 if chunk:
+                    chunk.sort(key=lambda item: item[0])
                     for start in range(0, len(chunk), BULK_CHUNK):
                         out_queue.put(chunk[start : start + BULK_CHUNK])
                 with lock:
@@ -516,15 +587,17 @@ def simu_admission(
                         for sid, univ_id, group_id in chunk
                     ]
                     for start in range(0, len(enrollment_rows), BULK_CHUNK):
-                        db.execute_many(
+                        _bulk_retry(
+                            db,
                             "INSERT IGNORE INTO enrollments "
                             "(student_id, university_id, major_group_id, academic_year) "
                             "VALUES (%s, %s, %s, %s)",
                             enrollment_rows[start : start + BULK_CHUNK],
                         )
-                    student_ids = [sid for sid, _u, _g in chunk]
+                    student_ids = sorted(sid for sid, _u, _g in chunk)
                     placeholders = ", ".join(["%s"] * len(student_ids))
-                    db.execute(
+                    _execute_retry(
+                        db,
                         "UPDATE students SET enrollment_status = %s "
                         f"WHERE id IN ({placeholders})",
                         tuple([ENROLLMENT_STATUS_ENROLLED, *student_ids]),
@@ -716,7 +789,8 @@ def simu_exam(
                             )
                         )
                         if len(exam_rows) >= 2000:
-                            db.execute_many(
+                            _bulk_retry(
+                                db,
                                 "INSERT IGNORE INTO undergraduate_scores "
                                 "(student_id, academic_year, subject, score, exam_date) "
                                 "VALUES (%s, %s, %s, %s, %s)",
@@ -725,7 +799,8 @@ def simu_exam(
                             flushed += len(exam_rows)
                             exam_rows = []
                 if exam_rows:
-                    db.execute_many(
+                    _bulk_retry(
+                        db,
                         "INSERT IGNORE INTO undergraduate_scores "
                         "(student_id, academic_year, subject, score, exam_date) "
                         "VALUES (%s, %s, %s, %s, %s)",
@@ -897,13 +972,15 @@ def simu_graduate(
                         (int(row[0]), float(row[1]), graduate_date)
                         for row in gpa_rows
                     ]
-                    db.execute_many(
+                    _bulk_retry(
+                        db,
                         "INSERT IGNORE INTO graduation_scores "
                         "(student_id, gpa, graduation_date) VALUES (%s, %s, %s)",
                         grad_rows,
                     )
                     status_ph = ", ".join(["%s"] * len(grad_rows))
-                    db.execute(
+                    _execute_retry(
+                        db,
                         "UPDATE students SET enrollment_status = %s "
                         "WHERE id IN (" + status_ph + ")",
                         tuple(
