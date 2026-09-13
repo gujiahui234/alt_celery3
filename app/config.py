@@ -74,6 +74,7 @@ TASK_SIMU_NCEE = TaskName.TASK_SIMU_NCEE.value
 TASK_SIMU_ADMISSION = TaskName.TASK_SIMU_ADMISSION.value
 TASK_SIMU_EXAM = TaskName.TASK_SIMU_EXAM.value
 TASK_SIMU_GRADUATE = TaskName.TASK_SIMU_GRADUATE.value
+TASK_ONE_STOP_GRADUATION = TaskName.TASK_ONE_STOP_GRADUATION.value
 
 #: Prefix of the Redis key that remembers the most recent periodic execution.
 LAST_RUN_KEY_PREFIX = "alt-celery3:last-run:"
@@ -134,6 +135,12 @@ API_KEY_GJLD: str = os.getenv("API_KEY_GJLD", "")
 BASE_URL: str = os.getenv("BASE_URL", "https://api.siliconflow.cn/v1")
 #: Chat model used by the AI tasks (overridable via ``.env``).
 GJLD_MODEL: str = os.getenv("GJLD_MODEL", "deepseek-ai/DeepSeek-V4-Flash")
+
+# --- Tasks API (FastAPI service) ---------------------------------------------
+#: Host the tasks API service binds to (``.env``).
+API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
+#: Port the tasks API service listens on (``.env``).
+API_PORT: int = _env_int("API_PORT", 8012)
 
 
 def build_beat_schedule() -> dict[str, dict[str, object]]:

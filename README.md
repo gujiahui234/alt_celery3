@@ -88,7 +88,25 @@ python run_celery.py beat --loglevel=INFO
 
 # 终端 3（可选）：启动 Flower 监控面板
 python run_celery.py flower --port=5555
+
+# 终端 4（可选）：启动任务 API 服务（默认 0.0.0.0:8012）
+python run_api.py
 ```
+
+### 任务 API 服务（run_api.py）
+
+基于 FastAPI 的只读查询服务，用于发现平台任务能力：
+
+| 端点 | 说明 |
+|------|------|
+| `GET /api/tasks` | 列出平台全部已注册任务（名称、来源模块、bind、Payload JSON Schema、关联的 beat 调度） |
+| `GET /api/tasks/{task_name}` | 按规范名查询单个任务（如 `tasks.db.try_mysql`） |
+| `GET /api/tasks/beat` | 列出当前配置的 celery-beat 周期调度 |
+| `GET /healthz` | 健康检查 |
+
+- 监听地址/端口由 `.env` 的 `API_HOST` / `API_PORT` 控制（默认 `0.0.0.0:8012`）
+- 交互式文档：`http://localhost:8012/docs`（Swagger UI）/ `/redoc`
+- 新增任务时无需改动本服务，任务注册表随 `app.celery_app` 的 include 模块自动更新
 
 ### 3. Docker 部署
 
@@ -169,6 +187,14 @@ python run_tasks.py simu-exam --year 2028
 # 4. 本科毕业：对入学满四年的在读学生按全部本科成绩计算 GPA（4.0 制），
 #    写入 graduation_scores，毕业日期固定 7 月 1 日，学生状态 → 30（已毕业）
 python run_tasks.py simu-graduate --year 2031
+
+# 5. 一条龙毕业（tasks.pipeline.one_stop_graduation）：对同一批次学生依次
+#    调用 simu-ncee → simu-admission → simu-exam（--exam-years 个学年，
+#    1-4，默认 1）→ simu-graduate（毕业年份 = 高考年份 + 4），步骤在 worker
+#    进程内按序内联执行，逐步发布 PROGRESS 进度；完成后返回汇总统计：
+#    examined / admitted / exams_recorded / graduated / average_gpa /
+#    admitted_by_nature 及各步骤明细（steps）
+python run_tasks.py one-stop --year 2027 --exam-years 2
 
 # 全部任务支持 --threads（并发写线程数，默认 8）且可幂等重跑（INSERT IGNORE）
 python run_tasks.py simu-ncee --year 2027 --threads 16

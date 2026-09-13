@@ -15,7 +15,6 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Framework :: Celery",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.13",
@@ -28,6 +27,9 @@ dependencies = [
     "flower>=2.0.1,<3",
     "redis>=5.2.0,<7",
     "python-dotenv>=1.0.0,<2",
+    # Tasks API (FastAPI service)
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
     # OpenAI-compatible SDK used to call the SiliconFlow Chat Completion API.
     "openai>=1.0,<3",
     # --- Custom packages (installed from GitHub) -----------------------------
@@ -38,7 +40,7 @@ dependencies = [
     # Loguru extension: console/file/async-batched MySQL logging.
     "sclog-lite @ git+https://github.com/gujiahui234/sclog_lite.git",
     # Declarative task contracts (names, signatures, payload schemas).
-    "alt-celery3-contract @ git+https://github.com/gujiahui234/alt_celery3_contract.git",
+    "alt-celery3-contract @ git+https://github.com/gujiahui234/alt_celery3_contract.git@0.2.0",
 ]
 
 [project.optional-dependencies]

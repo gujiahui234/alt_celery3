@@ -339,9 +339,19 @@ def simu_ncee(
                     )
                 _execute_retry(
                     db,
+                    # 状态更新条件必须与上方 SELECT 的筛选条件完全一致：
+                    # 只提升"适龄且未高考"的考生，避免窗口内其他学生被误改。
                     "UPDATE students SET enrollment_status = %s "
-                    "WHERE id >= %s AND id < %s AND enrollment_status = %s",
-                    (ENROLLMENT_STATUS_EXAMINED, w_lo, w_hi, ENROLLMENT_STATUS_NONE),
+                    "WHERE id >= %s AND id < %s AND enrollment_status = %s "
+                    "AND birthday BETWEEN %s AND %s",
+                    (
+                        ENROLLMENT_STATUS_EXAMINED,
+                        w_lo,
+                        w_hi,
+                        ENROLLMENT_STATUS_NONE,
+                        birthday_lo,
+                        birthday_hi,
+                    ),
                 )
                 with lock:
                     counters["windows"] += 1
@@ -473,24 +483,31 @@ def simu_admission(
             if groups_by_university.get(univ_id):
                 pools.setdefault(str(row["nature"]), []).append(univ_id)
 
+        tier_order = [nature for _, nature in ADMISSION_TIERS]
+
         def _pick(nature: str, rng: random.Random) -> tuple[int, int] | None:
-            """Pick a random (university, major group) pair of one nature.
+            """Pick a random (university, major group) pair for one student.
+
+            The student's own tier is tried first; when that tier has no
+            universities with major groups, the remaining tiers are tried
+            downward (worse) then upward, so that a single admission run
+            places every exam-taker as long as ANY university exists.
 
             Args:
                 nature: University nature tier to pick from.
                 rng: Random generator used for assignment.
 
             Returns:
-                ``(university_id, major_group_id)`` or ``None`` when the tier
-                has no universities with major groups.
+                ``(university_id, major_group_id)`` or ``None`` when no
+                university with major groups exists at all.
             """
-            candidates = pools.get(nature) or []
-            fallback = pools.get("其他") or []
-            for pool_ids in (candidates, fallback):
-                if not pool_ids:
-                    continue
-                univ_id = rng.choice(pool_ids)
-                return univ_id, rng.choice(groups_by_university[univ_id])
+            idx = tier_order.index(nature) if nature in tier_order else 0
+            order = [nature, *tier_order[idx + 1 :], *tier_order[:idx]]
+            for pool_nature in order:
+                candidates = pools.get(pool_nature) or []
+                if candidates:
+                    univ_id = rng.choice(candidates)
+                    return univ_id, rng.choice(groups_by_university[univ_id])
             return None
 
         band_defs: list[tuple[str, int, int]] = [
@@ -1005,7 +1022,7 @@ def simu_graduate(
                     done = counters["windows"]
                     students_done = counters["students"]
                     graduated_done = counters["graduated"]
-            _progress(done, students_done, graduated_done)
+            _progress(int(done), int(students_done), int(graduated_done))
 
         with ThreadPoolExecutor(max_workers=threads) as executor:
             futures = [executor.submit(_run_window) for _ in range(threads * 4)]

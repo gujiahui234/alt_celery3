@@ -32,6 +32,7 @@ from app.tasks.bulk_student_tasks import generate_many_students
 from app.tasks.db_tasks import get_one_student, try_mysql
 from app.tasks.init_db_tasks import init_web_db
 from app.tasks.example_tasks import add
+from app.tasks.pipeline_tasks import one_stop_graduation
 from app.tasks.simulation_tasks import (
     simu_admission,
     simu_exam,
@@ -59,6 +60,7 @@ commands:
                      threaded + bulk INSERT, designed for million-scale runs)
   get-un-groups      fetch university + major-group info via the SiliconFlow
                      LLM API and store new rows (name-based dedup)
+  one-stop           run the full lifecycle for one cohort (高考→录取→考试→毕业)
   catalog            print the task contract catalog (names, payload schemas)
   ping               ping every running worker (broker connectivity smoke test)
 
@@ -344,6 +346,29 @@ def cmd_simu_graduate(args: argparse.Namespace) -> int:
         simu_graduate,
         config.TASK_SIMU_GRADUATE,
         {"graduate_year": args.year, "threads": args.threads},
+    )
+
+
+def cmd_one_stop(args: argparse.Namespace) -> int:
+    """Dispatch the one-stop graduation pipeline task and wait for it.
+
+    Args:
+        args: Parsed command line arguments (year, threads, exam-years,
+            timeout).
+
+    Returns:
+        Process exit code.
+    """
+    kwargs: dict[str, Any] = {
+        "ncee_year": args.year,
+        "threads": args.threads,
+        "exam_years": args.exam_years,
+    }
+    return _dispatch_task(
+        one_stop_graduation,
+        config.TASK_ONE_STOP_GRADUATION,
+        kwargs,
+        timeout=args.timeout,
     )
 
 
@@ -669,6 +694,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser_grad.add_argument("--threads", type=int, default=8)
     parser_grad.set_defaults(func=cmd_simu_graduate)
+
+    parser_one_stop = subparsers.add_parser(
+        "one-stop",
+        help="run the full lifecycle for one cohort: ncee -> admission "
+        "-> exams -> graduation",
+    )
+    parser_one_stop.add_argument(
+        "--year", type=int, required=True, help="cohort year (exam date: 6/20)"
+    )
+    parser_one_stop.add_argument("--threads", type=int, default=8)
+    parser_one_stop.add_argument(
+        "--exam-years",
+        type=int,
+        default=1,
+        help="academic years of exams to simulate, 1-4 (default: 1)",
+    )
+    parser_one_stop.add_argument(
+        "--timeout",
+        type=float,
+        default=14400.0,
+        help="seconds to wait for the async result (default: 14400)",
+    )
+    parser_one_stop.set_defaults(func=cmd_one_stop)
 
     return parser
 

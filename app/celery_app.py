@@ -27,6 +27,7 @@ celery_app = Celery(
         "app.tasks.init_db_tasks",
         "app.tasks.simulation_tasks",
         "app.tasks.ai_tasks",
+        "app.tasks.pipeline_tasks",
     ],
 )
 
